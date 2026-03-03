@@ -5,6 +5,7 @@ use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -294,6 +295,44 @@ fn soft_guard(cfg: &Config, command: &str) -> Result<bool> {
     Ok(!blocked)
 }
 
+fn detect_openclaw_targets() -> Result<Vec<String>> {
+    let home = home_dir()?;
+    let mut set = BTreeSet::new();
+
+    // Conservative defaults
+    set.insert(format!("{}/.openclaw/openclaw.json", home.display()));
+    set.insert(format!("{}/.openclaw/extensions/", home.display()));
+    set.insert(format!("{}/.openclaw/cron/jobs.json", home.display()));
+    set.insert(format!("{}/.config/systemd/user/openclaw-gateway.service", home.display()));
+
+    // Try to parse runtime-discovered config path from OpenClaw
+    if let Ok(out) = Command::new("openclaw").args(["gateway", "status"]).output() {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            for line in s.lines() {
+                if let Some(rest) = line.strip_prefix("Config (cli): ") {
+                    let path = rest.trim().replace("~", &home.display().to_string());
+                    if !path.is_empty() {
+                        set.insert(path.clone());
+                        if let Some(parent) = PathBuf::from(&path).parent() {
+                            set.insert(parent.join("extensions/").display().to_string());
+                            set.insert(parent.join("cron/jobs.json").display().to_string());
+                        }
+                    }
+                }
+                if let Some(rest) = line.strip_prefix("Service file: ") {
+                    let path = rest.trim().replace("~", &home.display().to_string());
+                    if !path.is_empty() {
+                        set.insert(path);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(set.into_iter().collect())
+}
+
 fn install() -> Result<()> {
     let rt = runtime_dir()?;
     fs::create_dir_all(&rt)?;
@@ -343,12 +382,7 @@ fn install() -> Result<()> {
         approver_chat_id: chat_id,
         timeout_sec: 300,
         soft_guard_timeout_sec: 10,
-        openclaw_key_targets: vec![
-            format!("{}/.openclaw/openclaw.json", home_dir()?.display()),
-            format!("{}/.openclaw/extensions/", home_dir()?.display()),
-            format!("{}/.openclaw/cron/jobs.json", home_dir()?.display()),
-            format!("{}/.config/systemd/user/openclaw-gateway.service", home_dir()?.display()),
-        ],
+        openclaw_key_targets: detect_openclaw_targets()?,
     };
     let cfg_path = config_path()?;
     let cfg_text = serde_json::to_string_pretty(&cfg)?;
