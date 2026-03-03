@@ -5,7 +5,7 @@ use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
@@ -119,6 +119,7 @@ fn explain_command(cmd: &str, soft: bool) -> &'static str {
 
 fn assess_risk(cmd: &str) -> (Risk, &'static str) {
     let re_rm = Regex::new(r"rm\s+-rf\s+[~/]").unwrap();
+    let re_rm_var_or_dot = Regex::new(r"rm\s+-rf\s+(\$|\.|\./)").unwrap();
     let re_dd = Regex::new(r"dd\s+if=").unwrap();
     let re_mkfs = Regex::new(r"mkfs\.").unwrap();
     let re_dev = Regex::new(r">\s*/dev/sd[a-z]").unwrap();
@@ -127,12 +128,21 @@ fn assess_risk(cmd: &str) -> (Risk, &'static str) {
     let re_pipe = Regex::new(r"(curl|wget).*\|\s*(bash|sh|python)").unwrap();
     let re_sudo = Regex::new(r"sudo\s+").unwrap();
     let re_fw = Regex::new(r"iptables|firewall-cmd|ufw").unwrap();
+    let re_chain = Regex::new(r"(;|&&|\|\|)").unwrap();
 
     if cmd.contains(":(){:|:&};:") { return (Risk::Critical, "Fork炸弹"); }
     if re_rm.is_match(cmd) { return (Risk::Critical, "删除根目录或家目录文件"); }
+    if re_rm_var_or_dot.is_match(cmd) { return (Risk::Critical, "rm -rf + 变量/相对路径，存在绕过与误删风险"); }
     if re_dd.is_match(cmd) { return (Risk::Critical, "磁盘破坏命令"); }
     if re_mkfs.is_match(cmd) { return (Risk::Critical, "格式化文件系统"); }
     if re_dev.is_match(cmd) { return (Risk::Critical, "直接写入磁盘"); }
+
+    // Heuristic: command chaining with destructive verbs is high risk.
+    if re_chain.is_match(cmd)
+        && (cmd.contains("rm ") || cmd.contains("dd ") || cmd.contains("mkfs") || cmd.contains("chmod ") || cmd.contains("chown ")) {
+        return (Risk::High, "多段命令链包含破坏性动作");
+    }
+
     if re_777.is_match(cmd) { return (Risk::High, "设置文件为全局可写"); }
     if re_sysdir.is_match(cmd) { return (Risk::High, "写入系统目录"); }
     if re_pipe.is_match(cmd) { return (Risk::High, "管道下载到shell"); }
@@ -340,7 +350,15 @@ fn install() -> Result<()> {
             format!("{}/.config/systemd/user/openclaw-gateway.service", home_dir()?.display()),
         ],
     };
-    fs::write(config_path()?, serde_json::to_string_pretty(&cfg)?)?;
+    let cfg_path = config_path()?;
+    let cfg_text = serde_json::to_string_pretty(&cfg)?;
+    let mut f = OpenOptions::new().create(true).write(true).truncate(true).open(&cfg_path)?;
+    f.write_all(cfg_text.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&cfg_path, fs::Permissions::from_mode(0o600))?;
+    }
 
     let plugin_dir = home_dir()?.join(".openclaw/extensions/approval-guard-full");
     fs::create_dir_all(&plugin_dir)?;
