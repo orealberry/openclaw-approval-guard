@@ -83,7 +83,24 @@ answer_callback() {
   [[ -z "$cbid" ]] && return
   curl -s "https://api.telegram.org/bot$BOT_TOKEN/answerCallbackQuery" \
     -d callback_query_id="$cbid" \
-    --data-urlencode "text=$text" >/dev/null
+    --data-urlencode "text=$text" >/dev/null || true
+}
+
+pin_message() {
+  local message_id="$1"
+  [[ -z "$message_id" ]] && return
+  curl -s "https://api.telegram.org/bot$BOT_TOKEN/pinChatMessage" \
+    -d chat_id="$CHAT_ID" \
+    -d message_id="$message_id" \
+    -d disable_notification=true >/dev/null || true
+}
+
+unpin_message() {
+  local message_id="$1"
+  [[ -z "$message_id" ]] && return
+  curl -s "https://api.telegram.org/bot$BOT_TOKEN/unpinChatMessage" \
+    -d chat_id="$CHAT_ID" \
+    -d message_id="$message_id" >/dev/null || true
 }
 
 log() {
@@ -116,29 +133,36 @@ mark_message_done() {
 main() {
   local message_id
   message_id=$(send_request)
-  log "REQUEST $REQ_ID $CMD msg=$message_id"
+  pin_message "$message_id"
+  log "REQUEST $REQ_ID $CMD msg=$message_id pinned=true"
+
   local decision
   decision=$(poll_decision)
   local data cbid
   data=$(echo "$decision" | jq -r '.data // empty' 2>/dev/null || true)
   cbid=$(echo "$decision" | jq -r '.cbid // empty' 2>/dev/null || true)
+
   if [[ "$data" == approve:* ]]; then
     answer_callback "$cbid" "✅ 已批准，开始执行"
     mark_message_done "$message_id" "✅ 已批准"
+    unpin_message "$message_id"
     log "APPROVED $REQ_ID"
     echo "approved"
   elif [[ "$data" == reject:* ]]; then
     answer_callback "$cbid" "⛔ 已拒绝"
     mark_message_done "$message_id" "⛔ 已拒绝"
+    unpin_message "$message_id"
     log "REJECTED $REQ_ID"
     echo "rejected"
   elif [[ "$decision" == "timeout" ]]; then
     mark_message_done "$message_id" "⏳ 已超时"
+    unpin_message "$message_id"
     log "TIMEOUT $REQ_ID"
     echo "timeout"
   else
     # Fail closed: any malformed/empty decision is treated as reject
     mark_message_done "$message_id" "❌ 已拒绝(无效回调)"
+    unpin_message "$message_id"
     log "INVALID_OR_EMPTY_DECISION $REQ_ID"
     echo "rejected"
   fi
