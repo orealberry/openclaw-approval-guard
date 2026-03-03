@@ -6,6 +6,8 @@ Rust rewrite of OpenClaw approval guard:
 - Telegram callback workflow with pin/unpin behavior
 - OpenClaw `before_tool_call` hook installer
 
+中文介绍（Chinese intro）: [点击查看 README_zh-CN.md](./README_zh-CN.md)
+
 ## One-line install (beginner)
 
 ```bash
