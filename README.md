@@ -6,34 +6,36 @@ Rust rewrite of OpenClaw approval guard:
 - Telegram callback workflow with pin/unpin behavior
 - OpenClaw `before_tool_call` hook installer
 
-## Build
+## One-line install (beginner)
 
 ```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orealberry/openclaw-approval-guard/main/scripts/one-click-install.sh)"
+```
+
+This script will:
+1. install Rust automatically if missing
+2. clone repo and build release binary
+3. install binary to `~/.local/bin/openclaw-approval-guard`
+4. run interactive setup (ask token, auto-detect chat_id)
+5. install hook plugin and restart gateway
+
+## Manual install (advanced)
+
+```bash
+git clone https://github.com/orealberry/openclaw-approval-guard.git
+cd openclaw-approval-guard
 cargo build --release
+./target/release/openclaw-approval-guard install
 ```
 
-## Install
+## Usage
 
 ```bash
-./target/release/approval-guard install
-```
-
-The installer will:
-1. ask for bot token
-2. validate token
-3. auto-detect chat_id from Telegram message
-4. write runtime config to `~/.openclaw/approval-guard/config.json`
-5. install OpenClaw extension hook to `~/.openclaw/extensions/approval-guard-full`
-6. restart gateway
-
-## Run manually
-
-```bash
-./target/release/approval-guard run --command "sudo id"
+openclaw-approval-guard run "sudo id"
 ```
 
 ## Doctor
 
 ```bash
-./target/release/approval-guard doctor
+openclaw-approval-guard doctor
 ```
