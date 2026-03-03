@@ -16,8 +16,9 @@ This script will:
 1. install Rust automatically if missing
 2. clone repo and build release binary
 3. install binary to `~/.local/bin/openclaw-approval-guard`
-4. run interactive setup (ask token, auto-detect chat_id)
-5. install hook plugin and restart gateway
+4. read `APPROVAL_BOT_TOKEN` from environment (prompt only to export in current shell if missing)
+5. auto-detect `chat_id` when `APPROVAL_CHAT_ID` is not set
+6. install hook plugin and restart gateway
 
 ## Manual install (advanced)
 
@@ -30,7 +31,11 @@ cargo build --release
 
 ## Usage
 
+Sensitive values are required from environment:
+
 ```bash
+export APPROVAL_BOT_TOKEN='...'
+export APPROVAL_CHAT_ID='...'
 openclaw-approval-guard run "sudo id"
 ```
 

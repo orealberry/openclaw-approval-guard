@@ -74,19 +74,15 @@ fn load_config() -> Result<Config> {
     let p = config_path()?;
     let raw = fs::read_to_string(&p).with_context(|| format!("read config: {}", p.display()))?;
     let mut cfg: Config = serde_json::from_str(&raw)?;
-    if let Ok(v) = std::env::var("APPROVAL_BOT_TOKEN") {
-        if !v.trim().is_empty() {
-            cfg.bot_token = v;
-        }
+
+    // Force sensitive values from env only.
+    let token = std::env::var("APPROVAL_BOT_TOKEN").unwrap_or_default();
+    let chat = std::env::var("APPROVAL_CHAT_ID").unwrap_or_default();
+    if token.trim().is_empty() || chat.trim().is_empty() {
+        return Err(anyhow!("APPROVAL_BOT_TOKEN and APPROVAL_CHAT_ID are required in environment"));
     }
-    if let Ok(v) = std::env::var("APPROVAL_CHAT_ID") {
-        if !v.trim().is_empty() {
-            cfg.approver_chat_id = v;
-        }
-    }
-    if cfg.bot_token.trim().is_empty() || cfg.approver_chat_id.trim().is_empty() {
-        return Err(anyhow!("bot_token/approver_chat_id missing"));
-    }
+    cfg.bot_token = token;
+    cfg.approver_chat_id = chat;
     Ok(cfg)
 }
 
@@ -337,14 +333,10 @@ fn install() -> Result<()> {
     let rt = runtime_dir()?;
     fs::create_dir_all(&rt)?;
 
-    let mut token = std::env::var("APPROVAL_BOT_TOKEN").unwrap_or_default();
+    let token = std::env::var("APPROVAL_BOT_TOKEN").unwrap_or_default();
     if token.trim().is_empty() {
-        print!("Enter Telegram bot token: ");
-        io::stdout().flush()?;
-        io::stdin().read_line(&mut token)?;
-        token = token.trim().to_string();
+        return Err(anyhow!("APPROVAL_BOT_TOKEN is required"));
     }
-    if token.is_empty() { return Err(anyhow!("empty token")); }
 
     let client = Client::new();
     let me = tg_api(&client, &token, "getMe", &[])?;
@@ -354,7 +346,7 @@ fn install() -> Result<()> {
 
     let mut chat_id = std::env::var("APPROVAL_CHAT_ID").unwrap_or_default();
     if chat_id.trim().is_empty() {
-        println!("Send one message to @{} now, then press Enter.", username);
+        println!("APPROVAL_CHAT_ID not set. Send one message to @{} now, then press Enter.", username);
         let mut dummy = String::new();
         io::stdin().read_line(&mut dummy)?;
 
@@ -375,11 +367,13 @@ fn install() -> Result<()> {
             if !chat_id.is_empty() { break; }
         }
         if chat_id.is_empty() { return Err(anyhow!("chat id detection timeout")); }
+        println!("Detected chat_id: {}", chat_id);
+        println!("Please export before normal use: export APPROVAL_CHAT_ID='{}'", chat_id);
     }
 
     let cfg = Config {
-        bot_token: token,
-        approver_chat_id: chat_id,
+        bot_token: String::new(),
+        approver_chat_id: String::new(),
         timeout_sec: 300,
         soft_guard_timeout_sec: 10,
         openclaw_key_targets: detect_openclaw_targets()?,
@@ -410,8 +404,10 @@ fn install() -> Result<()> {
 }
 
 fn doctor() -> Result<()> {
-    let cfg = load_config()?;
-    println!("config ok, chat_id={} token_set={}", cfg.approver_chat_id, !cfg.bot_token.is_empty());
+    let _cfg = load_config()?;
+    let token_set = std::env::var("APPROVAL_BOT_TOKEN").map(|v| !v.is_empty()).unwrap_or(false);
+    let chat_set = std::env::var("APPROVAL_CHAT_ID").map(|v| !v.is_empty()).unwrap_or(false);
+    println!("config ok, env_token_set={}, env_chat_set={}", token_set, chat_set);
     Ok(())
 }
 

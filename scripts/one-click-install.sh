@@ -36,10 +36,17 @@ echo "[4/5] Building release binary..."
 cd "$WORKDIR"
 cargo build --release
 
-echo "[5/5] Installing binary + running interactive installer..."
+echo "[5/5] Installing binary + running installer..."
 mkdir -p "$HOME/.local/bin"
 cp ./target/release/openclaw-approval-guard "$HOME/.local/bin/openclaw-approval-guard"
 chmod +x "$HOME/.local/bin/openclaw-approval-guard"
+
+if [[ -z "${APPROVAL_BOT_TOKEN:-}" ]]; then
+  read -rsp "Enter APPROVAL_BOT_TOKEN: " APPROVAL_BOT_TOKEN
+  echo
+  export APPROVAL_BOT_TOKEN
+fi
+
 "$HOME/.local/bin/openclaw-approval-guard" install
 
 echo ""
