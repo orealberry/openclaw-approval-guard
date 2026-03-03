@@ -4,8 +4,8 @@ set -euo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="$HERE/config.json"
 STATE_DIR="$HERE/state"
-OFFSET_FILE="$STATE_DIR/offset.txt"
 LOG_FILE="$HERE/approval.log"
+UPDATES_LOCK_FILE="$STATE_DIR/updates.lock"
 mkdir -p "$STATE_DIR"
 
 jget() { jq -r "$1" "$CONFIG"; }
@@ -37,9 +37,6 @@ explain_command() {
     echo "解读：检测到潜在关键配置写入，请确认变更目的与回滚方案。"
   fi
 }
-
-get_offset() { [[ -f "$OFFSET_FILE" ]] && cat "$OFFSET_FILE" || echo 0; }
-set_offset() { echo "$1" > "$OFFSET_FILE"; }
 
 log() { echo "$(date -Is) $1" >> "$LOG_FILE"; }
 
@@ -106,8 +103,19 @@ $advice"
 
 poll_abort() {
   local deadline=$(( $(date +%s) + TIMEOUT_SEC ))
-  local offset
-  offset=$(get_offset)
+
+  exec 9>"$UPDATES_LOCK_FILE"
+  if ! flock -w 5 9; then
+    log "SOFT_LOCK_TIMEOUT $REQ_ID"
+    echo "timeout"
+    return 0
+  fi
+
+  local baseline_resp baseline offset
+  baseline_resp=$(curl -s "https://api.telegram.org/bot$BOT_TOKEN/getUpdates" -d timeout=0)
+  baseline=$(echo "$baseline_resp" | jq '.result[-1].update_id // 0')
+  offset=$((baseline + 1))
+
   while (( $(date +%s) < deadline )); do
     local resp
     resp=$(curl -s "https://api.telegram.org/bot$BOT_TOKEN/getUpdates" \
@@ -116,7 +124,6 @@ poll_abort() {
     new_offset=$(echo "$resp" | jq '.result[-1].update_id // null')
     if [[ "$new_offset" != "null" && -n "$new_offset" ]]; then
       offset=$((new_offset + 1))
-      set_offset "$offset"
     fi
 
     local hit
@@ -126,10 +133,12 @@ poll_abort() {
         | {data:.callback_query.data, cbid:.callback_query.id}) else empty end' 2>/dev/null | head -n1)
     if [[ -n "$hit" ]]; then
       echo "$hit"
+      flock -u 9
       return 0
     fi
     sleep 1
   done
+  flock -u 9
   echo "timeout"
 }
 

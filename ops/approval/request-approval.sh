@@ -4,8 +4,8 @@ set -euo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="$HERE/config.json"
 STATE_DIR="$HERE/state"
-OFFSET_FILE="$STATE_DIR/offset.txt"
 LOG_FILE="$HERE/approval.log"
+UPDATES_LOCK_FILE="$STATE_DIR/updates.lock"
 mkdir -p "$STATE_DIR"
 
 jget() { jq -r "$1" "$CONFIG"; }
@@ -76,20 +76,30 @@ $advice
   echo "$resp" | jq -r '.result.message_id // empty'
 }
 
-get_offset() { [[ -f "$OFFSET_FILE" ]] && cat "$OFFSET_FILE" || echo 0; }
-set_offset() { echo "$1" > "$OFFSET_FILE"; }
-
 poll_decision() {
   local deadline=$(( $(date +%s) + TIMEOUT_SEC ))
-  local offset=$(get_offset)
+
+  # Serialize Telegram update consumption to avoid cross-request races.
+  exec 9>"$UPDATES_LOCK_FILE"
+  if ! flock -w 5 9; then
+    log "LOCK_TIMEOUT $REQ_ID"
+    echo "timeout"
+    return 0
+  fi
+
+  local baseline_resp baseline offset
+  baseline_resp=$(curl -s "https://api.telegram.org/bot$BOT_TOKEN/getUpdates" -d timeout=0)
+  baseline=$(echo "$baseline_resp" | jq '.result[-1].update_id // 0')
+  offset=$((baseline + 1))
+
   while (( $(date +%s) < deadline )); do
     local resp
     resp=$(curl -s "https://api.telegram.org/bot$BOT_TOKEN/getUpdates" \
       -d offset="$offset" -d timeout=20)
-    local new_offset=$(echo "$resp" | jq '.result[-1].update_id // null')
+    local new_offset
+    new_offset=$(echo "$resp" | jq '.result[-1].update_id // null')
     if [[ "$new_offset" != "null" && -n "$new_offset" ]]; then
       offset=$((new_offset + 1))
-      set_offset "$offset"
     fi
     local decision
     decision=$(echo "$resp" | jq -rc \
@@ -100,9 +110,12 @@ poll_decision() {
          | {data: .callback_query.data, cbid: .callback_query.id}) else empty end' 2>/dev/null | head -n1)
     if [[ -n "$decision" ]]; then
       echo "$decision"
+      flock -u 9
       return 0
     fi
   done
+
+  flock -u 9
   echo "timeout"
 }
 
@@ -117,18 +130,28 @@ answer_callback() {
 pin_message() {
   local message_id="$1"
   [[ -z "$message_id" ]] && return
-  curl -s "https://api.telegram.org/bot$BOT_TOKEN/pinChatMessage" \
+  local resp ok
+  resp=$(curl -s "https://api.telegram.org/bot$BOT_TOKEN/pinChatMessage" \
     -d chat_id="$CHAT_ID" \
     -d message_id="$message_id" \
-    -d disable_notification=true >/dev/null || true
+    -d disable_notification=true || true)
+  ok=$(echo "$resp" | jq -r '.ok // false' 2>/dev/null || echo false)
+  if [[ "$ok" != "true" ]]; then
+    log "PIN_FAILED $REQ_ID msg=$message_id resp=$(printf %q "$resp")"
+  fi
 }
 
 unpin_message() {
   local message_id="$1"
   [[ -z "$message_id" ]] && return
-  curl -s "https://api.telegram.org/bot$BOT_TOKEN/unpinChatMessage" \
+  local resp ok
+  resp=$(curl -s "https://api.telegram.org/bot$BOT_TOKEN/unpinChatMessage" \
     -d chat_id="$CHAT_ID" \
-    -d message_id="$message_id" >/dev/null || true
+    -d message_id="$message_id" || true)
+  ok=$(echo "$resp" | jq -r '.ok // false' 2>/dev/null || echo false)
+  if [[ "$ok" != "true" ]]; then
+    log "UNPIN_FAILED $REQ_ID msg=$message_id resp=$(printf %q "$resp")"
+  fi
 }
 
 log() {

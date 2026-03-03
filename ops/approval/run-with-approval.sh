@@ -23,21 +23,43 @@ detect_user_confirmation() {
 
 is_openclaw_key_config_touch() {
   local cmd="$1"
-  # 仅在包含“写操作迹象”时触发软拦截提醒
-  local write_hint='(sed[[:space:]]+-i|tee[[:space:]]|>[[:space:]]|>>[[:space:]]|cp[[:space:]]|mv[[:space:]]|cat[[:space:]].*>|jq[[:space:]].*>|perl[[:space:]].*-i|python[[:space:]].*open\()'
-  if ! echo "$cmd" | grep -qE "$write_hint"; then
-    return 1
-  fi
 
-  # 关键目标路径（可在 config.json 扩展）
   while IFS= read -r target; do
     [[ -z "$target" || "$target" == "null" ]] && continue
-    if [[ "$cmd" == *"$target"* ]]; then
+
+    # sed/perl in-place edit on target
+    if echo "$cmd" | grep -qE "(sed[[:space:]]+-i|perl[[:space:]].*-i).*$target"; then
+      return 0
+    fi
+
+    # direct redirection into target
+    if echo "$cmd" | grep -qE ">>[[:space:]]*$target|>[[:space:]]*$target"; then
+      return 0
+    fi
+
+    # tee writes to target
+    if echo "$cmd" | grep -qE "tee([[:space:]]+-a)?[[:space:]]+$target"; then
+      return 0
+    fi
+
+    # cp/mv where destination is target
+    if echo "$cmd" | grep -qE "(cp|mv)[[:space:]].*[[:space:]]$target([[:space:]]|$)"; then
+      return 0
+    fi
+
+    # jq redirect to target
+    if echo "$cmd" | grep -qE "jq[[:space:]].*>[[:space:]]*$target"; then
       return 0
     fi
   done < <(jq -r '.openclaw_key_targets[]? // empty' "$CONFIG")
 
   return 1
+}
+
+execute_command() {
+  local cmd="$1"
+  # Run in isolated shell to avoid eval side effects in current process.
+  bash -o errexit -o pipefail -c "$cmd"
 }
 
 assess_risk() {
@@ -95,7 +117,7 @@ if [[ "$RISK" == "low" ]]; then
       exit 20
     fi
   fi
-  eval "$CMD"
+  execute_command "$CMD"
   exit $?
 fi
 
@@ -103,7 +125,7 @@ decision=$("$APPROVAL" "$CMD" "$RISK" "$REASON")
 case "$decision" in
   approved)
     echo "[approval] ✅ 批准（$RISK），执行：$CMD" >&2
-    eval "$CMD"
+    execute_command "$CMD"
     ;;
   rejected)
     echo "[approval] ❌ 被拒绝（$RISK）" >&2
