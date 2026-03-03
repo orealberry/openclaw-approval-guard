@@ -4,7 +4,7 @@ A safety gate for OpenClaw command execution.
 
 Goal: turn risky shell execution from **"run immediately"** into **"visible, reviewable, and controllable"**.
 
-Chinese intro: [README_zh-CN.md](./README_zh-CN.md)
+中文简介：[README_zh-CN.md](./README_zh-CN.md)
 
 ---
 
