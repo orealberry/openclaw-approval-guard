@@ -13,7 +13,7 @@ Goal: gate **high-risk commands** behind a Telegram approval bot (`@hookapproval
 1) Edit `config.json`:
 ```json
 {
-  "bot_token": "<REDACTED_BOT_TOKEN>",
+  "bot_token": "<your_bot_token>",
   "approver_chat_id": "<fill_your_chat_id>",
   "timeout_sec": 300,
   "risk_patterns": [
