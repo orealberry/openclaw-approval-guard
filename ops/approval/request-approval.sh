@@ -23,9 +23,34 @@ CMD="$1"
 RISK="${2:-high}"
 REASON="${3:-命中高危策略}"
 
+explain_command() {
+  local c="$1"
+  if echo "$c" | grep -qE '^rm[[:space:]]+-rf'; then
+    echo "解读：rm -rf 是递归强制删除命令，误用可能造成不可逆数据丢失。"
+  elif echo "$c" | grep -qE 'dd[[:space:]]+if='; then
+    echo "解读：dd 可进行底层块设备读写，写错目标可能直接破坏磁盘数据。"
+  elif echo "$c" | grep -qE 'mkfs\.'; then
+    echo "解读：mkfs 会格式化文件系统，目标分区数据会被清空。"
+  elif echo "$c" | grep -qE '(curl|wget).*\|[[:space:]]*(bash|sh|python)'; then
+    echo "解读：下载后直接管道执行脚本，存在供应链与远程代码执行风险。"
+  elif echo "$c" | grep -qE 'chmod[[:space:]]+777'; then
+    echo "解读：chmod 777 会让所有用户可读写执行，权限过宽有安全风险。"
+  elif echo "$c" | grep -qE 'sudo[[:space:]]+'; then
+    echo "解读：sudo 将以特权运行命令，操作影响范围与破坏面会扩大。"
+  elif echo "$c" | grep -qE 'iptables|firewall-cmd|ufw'; then
+    echo "解读：防火墙规则变更可能导致远程连接中断或服务暴露。"
+  elif echo "$c" | grep -qE 'systemctl[[:space:]]+stop'; then
+    echo "解读：停止系统服务可能导致业务中断或守护进程失效。"
+  else
+    echo "解读：该命令可能影响系统状态，请确认目标与参数无误后再执行。"
+  fi
+}
+
 send_request() {
   local created_at
   created_at="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+  local advice
+  advice="$(explain_command "$CMD")"
   local text="🚨 <b>高危操作审批</b>
 
 <b>风险等级</b> ${RISK^^}
@@ -36,6 +61,9 @@ send_request() {
 
 <b>请求ID</b> <code>$REQ_ID</code>
 <b>时间</b> $created_at
+
+<b>建议解读</b>
+$advice
 
 请确认是否执行该操作："
   local keyboard='{"inline_keyboard":[[{"text":"✅ 批准执行","callback_data":"approve:'"$REQ_ID"'"},{"text":"⛔ 拒绝执行","callback_data":"reject:'"$REQ_ID"'"}]]}'
@@ -112,6 +140,8 @@ mark_message_done() {
   [[ -z "$message_id" ]] && return
   local finished_at
   finished_at="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+  local advice
+  advice="$(explain_command "$CMD")"
   local new_text="🛡️ <b>审批已处理</b>
 
 <b>风险等级</b> ${RISK^^}
@@ -122,7 +152,10 @@ mark_message_done() {
 
 <b>请求ID</b> <code>$REQ_ID</code>
 <b>结果</b> $status
-<b>处理时间</b> $finished_at"
+<b>处理时间</b> $finished_at
+
+<b>建议解读</b>
+$advice"
   curl -s "https://api.telegram.org/bot$BOT_TOKEN/editMessageText" \
     -d chat_id="$CHAT_ID" \
     -d message_id="$message_id" \

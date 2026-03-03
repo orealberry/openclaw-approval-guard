@@ -21,6 +21,23 @@ if [[ -z "$CHAT_ID" || "$CHAT_ID" == "null" || "$CHAT_ID" == "<fill_your_chat_id
 REQ_ID="soft-$(date +%s)-$RANDOM"
 CMD="$1"
 
+explain_command() {
+  local c="$1"
+  if echo "$c" | grep -qE 'openclaw\.json'; then
+    echo "解读：openclaw.json 是主配置文件，参数错误可能导致网关或插件启动失败。"
+  elif echo "$c" | grep -qE '/\.openclaw/extensions/'; then
+    echo "解读：extensions 目录变更会影响插件加载，错误清单可能造成功能失效。"
+  elif echo "$c" | grep -qE 'cron/jobs\.json'; then
+    echo "解读：cron 作业配置变更可能导致定时任务异常触发或漏执行。"
+  elif echo "$c" | grep -qE 'openclaw-gateway\.service'; then
+    echo "解读：gateway systemd 配置变更可能影响服务启动与稳定性。"
+  elif echo "$c" | grep -qE '(cp|mv|sed -i|tee|>>|>)'; then
+    echo "解读：该命令包含文件写操作，若目标是关键配置可能带来服务风险。"
+  else
+    echo "解读：检测到潜在关键配置写入，请确认变更目的与回滚方案。"
+  fi
+}
+
 get_offset() { [[ -f "$OFFSET_FILE" ]] && cat "$OFFSET_FILE" || echo 0; }
 set_offset() { echo "$1" > "$OFFSET_FILE"; }
 
@@ -29,10 +46,15 @@ log() { echo "$(date -Is) $1" >> "$LOG_FILE"; }
 send_alert() {
   local created_at
   created_at="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+  local advice
+  advice="$(explain_command "$CMD")"
   local text="⚠️ <b>关键配置修改提醒</b>
 
 检测到命令可能修改 OpenClaw 关键配置：
 <code>$CMD</code>
+
+<b>建议解读</b>
+$advice
 
 <b>策略</b>
 • 默认 ${TIMEOUT_SEC} 秒后自动放行
@@ -63,13 +85,18 @@ mark_done() {
   [[ -z "$message_id" ]] && return
   local finished_at
   finished_at="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+  local advice
+  advice="$(explain_command "$CMD")"
   local text="🛡️ <b>配置修改提醒已处理</b>
 
 <code>$CMD</code>
 
 <b>请求ID</b> <code>$REQ_ID</code>
 <b>结果</b> $status
-<b>处理时间</b> $finished_at"
+<b>处理时间</b> $finished_at
+
+<b>建议解读</b>
+$advice"
   curl -s "https://api.telegram.org/bot$BOT_TOKEN/editMessageText" \
     -d chat_id="$CHAT_ID" \
     -d message_id="$message_id" \
