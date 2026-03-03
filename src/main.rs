@@ -180,12 +180,46 @@ fn assess_risk(cmd: &str) -> (Risk, &'static str) {
 }
 
 fn is_soft_target(cmd: &str, cfg: &Config) -> bool {
+    let c = cmd;
+
+    // Any mutation under approval-guard runtime dir should always alert.
+    let runtime_prefix = home_dir()
+        .map(|h| format!("{}/.openclaw/approval-guard/", h.display()))
+        .unwrap_or_else(|_| String::from("/root/.openclaw/approval-guard/"));
+
+    let mutating = c.contains("rm ")
+        || c.contains("mv ")
+        || c.contains("cp ")
+        || c.contains("sed -i")
+        || c.contains("tee ")
+        || c.contains("truncate ")
+        || c.contains("unlink ")
+        || c.contains("mkdir ")
+        || c.contains("touch ")
+        || c.contains("chmod ")
+        || c.contains("chown ")
+        || c.contains("> ")
+        || c.contains(">>");
+
+    if mutating && c.contains(&runtime_prefix) {
+        return true;
+    }
+
     for t in &cfg.openclaw_key_targets {
-        let c = cmd;
-        if c.contains(&format!("sed -i")) && c.contains(t) { return true; }
+        if c.contains("sed -i") && c.contains(t) { return true; }
         if c.contains(&format!("> {}", t)) || c.contains(&format!(">>{}", t)) || c.contains(&format!(">> {}", t)) { return true; }
         if c.contains(" tee ") && c.contains(t) { return true; }
         if (c.contains("cp ") || c.contains("mv ")) && c.ends_with(t) { return true; }
+
+        // Also soft-alert destructive ops under key config paths/directories.
+        if (c.contains("rm ") || c.contains("truncate ") || c.contains("unlink ")) && c.contains(t) {
+            return true;
+        }
+
+        // If target is a key directory (ending with '/'), watch file ops inside it.
+        if t.ends_with('/') && mutating && c.contains(t) {
+            return true;
+        }
     }
     false
 }
