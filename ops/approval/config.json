@@ -1,0 +1,35 @@
+{
+  "bot_token": "<REDACTED_BOT_TOKEN>",
+  "approver_chat_id": "<REDACTED_CHAT_ID>",
+  "timeout_sec": 300,
+  "soft_guard_timeout_sec": 10,
+  "contextAware": {
+    "confirmationKeywords": "我已明确风险|I understand the risk"
+  },
+  "openclaw_key_targets": [
+    "/root/.openclaw/openclaw.json",
+    "~/.openclaw/openclaw.json",
+    "/root/.openclaw/extensions/",
+    "~/.openclaw/extensions/",
+    "/root/.openclaw/cron/jobs.json",
+    "~/.openclaw/cron/jobs.json",
+    "/root/.config/systemd/user/openclaw-gateway.service",
+    "~/.config/systemd/user/openclaw-gateway.service"
+  ],
+  "risk_patterns": [
+    "rm -rf /",
+    "rm -rf /root",
+    "dd if=/dev/zero",
+    "mkfs",
+    ":(){:|:&};:",
+    "shutdown -h",
+    "reboot",
+    "chmod 777 /",
+    "chown -R ",
+    "iptables",
+    "ufw delete",
+    "systemctl stop",
+    "curl .* | sh",
+    "wget .* | sh"
+  ]
+}
