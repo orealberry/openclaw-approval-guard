@@ -6,8 +6,8 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -302,28 +302,31 @@ fn install() -> Result<()> {
     if !me["ok"].as_bool().unwrap_or(false) { return Err(anyhow!("token invalid")); }
     let username = me["result"]["username"].as_str().unwrap_or("bot");
     println!("[ok] bot: @{}", username);
-    println!("Send one message to @{} now, then press Enter.", username);
-    let mut dummy = String::new();
-    io::stdin().read_line(&mut dummy)?;
 
-    let base = tg_api(&client, &token, "getUpdates", &[("timeout", "0".to_string())])?;
-    let mut offset = base["result"].as_array().and_then(|a| a.last()).and_then(|x| x["update_id"].as_i64()).unwrap_or(0) + 1;
-    let deadline = now_ts() + 120;
-    let mut chat_id = String::new();
-    while now_ts() < deadline {
-        let v = tg_api(&client, &token, "getUpdates", &[("offset", offset.to_string()), ("timeout", "10".to_string())])?;
-        if let Some(arr) = v["result"].as_array() {
-            if let Some(last) = arr.last().and_then(|x| x["update_id"].as_i64()) { offset = last + 1; }
-            for it in arr {
-                if let Some(id) = it["message"]["chat"]["id"].as_i64() {
-                    chat_id = id.to_string();
-                    break;
+    let mut chat_id = std::env::var("APPROVAL_CHAT_ID").unwrap_or_default();
+    if chat_id.trim().is_empty() {
+        println!("Send one message to @{} now, then press Enter.", username);
+        let mut dummy = String::new();
+        io::stdin().read_line(&mut dummy)?;
+
+        let base = tg_api(&client, &token, "getUpdates", &[("timeout", "0".to_string())])?;
+        let mut offset = base["result"].as_array().and_then(|a| a.last()).and_then(|x| x["update_id"].as_i64()).unwrap_or(0) + 1;
+        let deadline = now_ts() + 120;
+        while now_ts() < deadline {
+            let v = tg_api(&client, &token, "getUpdates", &[("offset", offset.to_string()), ("timeout", "10".to_string())])?;
+            if let Some(arr) = v["result"].as_array() {
+                if let Some(last) = arr.last().and_then(|x| x["update_id"].as_i64()) { offset = last + 1; }
+                for it in arr {
+                    if let Some(id) = it["message"]["chat"]["id"].as_i64() {
+                        chat_id = id.to_string();
+                        break;
+                    }
                 }
             }
+            if !chat_id.is_empty() { break; }
         }
-        if !chat_id.is_empty() { break; }
+        if chat_id.is_empty() { return Err(anyhow!("chat id detection timeout")); }
     }
-    if chat_id.is_empty() { return Err(anyhow!("chat id detection timeout")); }
 
     let cfg = Config {
         bot_token: token,
