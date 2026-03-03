@@ -23,7 +23,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Install,
-    Run { command: String },
+    Run {
+        /// Command as positional argument
+        command: Option<String>,
+        /// Command via flag (compat)
+        #[arg(long = "command")]
+        command_flag: Option<String>,
+    },
     Doctor,
 }
 
@@ -108,6 +114,13 @@ fn now_ts() -> u64 {
 
 fn req_id(prefix: &str) -> String {
     format!("{}-{}-{}", prefix, now_ts(), std::process::id())
+}
+
+fn html_escape(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn tg_api(client: &Client, token: &str, method: &str, form: &[(&str, String)]) -> Result<Value> {
@@ -225,15 +238,36 @@ fn is_soft_target(cmd: &str, cfg: &Config) -> bool {
 }
 
 fn run_shell(command: &str) -> Result<i32> {
-    let status = Command::new("bash").arg("-o").arg("errexit").arg("-o").arg("pipefail").arg("-c").arg(command).status()?;
-    Ok(status.code().unwrap_or(1))
+    #[cfg(target_os = "windows")]
+    {
+        let status = Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-Command")
+            .arg(command)
+            .status()?;
+        return Ok(status.code().unwrap_or(1));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let status = Command::new("bash")
+            .arg("-o")
+            .arg("errexit")
+            .arg("-o")
+            .arg("pipefail")
+            .arg("-c")
+            .arg(command)
+            .status()?;
+        Ok(status.code().unwrap_or(1))
+    }
 }
 
 fn updates_lock_path() -> Result<PathBuf> {
     Ok(runtime_dir()?.join("updates.lock"))
 }
 
-fn poll_for_callback(client: &Client, token: &str, matcher_prefix: &str, timeout_sec: u64) -> Result<Option<(String, String)>> {
+fn poll_for_callback(client: &Client, token: &str, matcher_prefixes: &[String], timeout_sec: u64) -> Result<Option<(String, String)>> {
     fs::create_dir_all(runtime_dir()?)?;
     let lock_p = updates_lock_path()?;
     let f = File::create(lock_p)?;
@@ -251,7 +285,7 @@ fn poll_for_callback(client: &Client, token: &str, matcher_prefix: &str, timeout
             }
             for item in arr {
                 let data = item["callback_query"]["data"].as_str().unwrap_or("");
-                if data.starts_with(matcher_prefix) {
+                if matcher_prefixes.iter().any(|p| data.starts_with(p)) {
                     let cbid = item["callback_query"]["id"].as_str().unwrap_or("").to_string();
                     f.unlock()?;
                     return Ok(Some((data.to_string(), cbid)));
@@ -285,15 +319,17 @@ fn hard_approval(cfg: &Config, command: &str, risk: Risk, reason: &str) -> Resul
     let client = Client::new();
     let rid = req_id("req");
     let en = is_en(cfg);
+    let esc_command = html_escape(command);
+    let esc_reason = html_escape(reason);
     let text = if en {
         format!(
             "🚨 <b>High-Risk Command Approval</b>\n\n<b>Risk</b> {}\n<b>Reason</b> {}\n\n<b>Command</b>\n<code>{}</code>\n\n<b>Request ID</b> <code>{}</code>\n\n<b>Interpretation</b>\n{}\n\nApprove execution?",
-            risk.as_str().to_uppercase(), reason, command, rid, explain_command(command, false, en)
+            risk.as_str().to_uppercase(), esc_reason, esc_command, rid, explain_command(command, false, en)
         )
     } else {
         format!(
             "🚨 <b>高危操作审批</b>\n\n<b>风险等级</b> {}\n<b>触发原因</b> {}\n\n<b>命令</b>\n<code>{}</code>\n\n<b>请求ID</b> <code>{}</code>\n\n<b>建议解读</b>\n{}\n\n请确认是否执行该操作：",
-            risk.as_str().to_uppercase(), reason, command, rid, explain_command(command, false, en)
+            risk.as_str().to_uppercase(), esc_reason, esc_command, rid, explain_command(command, false, en)
         )
     };
     let kb = if en {
@@ -310,8 +346,12 @@ fn hard_approval(cfg: &Config, command: &str, risk: Risk, reason: &str) -> Resul
     let msg_id = sent["result"]["message_id"].as_i64().unwrap_or_default();
     pin_msg(&client, cfg, msg_id);
 
-    let decision = poll_for_callback(&client, &cfg.bot_token, &format!("approve:{}", rid), cfg.timeout_sec)?
-        .or_else(|| poll_for_callback(&client, &cfg.bot_token, &format!("reject:{}", rid), 1).ok().flatten());
+    let decision = poll_for_callback(
+        &client,
+        &cfg.bot_token,
+        &[format!("approve:{}", rid), format!("reject:{}", rid)],
+        cfg.timeout_sec,
+    )?;
 
     let approved = match decision {
         Some((d, cbid)) if d.starts_with("approve:") => {
@@ -330,12 +370,12 @@ fn hard_approval(cfg: &Config, command: &str, risk: Risk, reason: &str) -> Resul
     let final_text = if en {
         format!(
             "🛡️ <b>Approval Resolved</b>\n\n<b>Risk</b> {}\n<b>Command</b>\n<code>{}</code>\n\n<b>Result</b> {}\n\n<b>Interpretation</b>\n{}",
-            risk.as_str().to_uppercase(), command, if approved {"✅ Approved"} else {"⛔ Rejected/Timeout"}, explain_command(command, false, en)
+            risk.as_str().to_uppercase(), esc_command, if approved {"✅ Approved"} else {"⛔ Rejected/Timeout"}, explain_command(command, false, en)
         )
     } else {
         format!(
             "🛡️ <b>审批已处理</b>\n\n<b>风险等级</b> {}\n<b>命令</b>\n<code>{}</code>\n\n<b>结果</b> {}\n\n<b>建议解读</b>\n{}",
-            risk.as_str().to_uppercase(), command, if approved {"✅ 已批准"} else {"⛔ 已拒绝/超时"}, explain_command(command, false, en)
+            risk.as_str().to_uppercase(), esc_command, if approved {"✅ 已批准"} else {"⛔ 已拒绝/超时"}, explain_command(command, false, en)
         )
     };
     edit_msg(&client, cfg, msg_id, &final_text);
@@ -347,15 +387,16 @@ fn soft_guard(cfg: &Config, command: &str) -> Result<bool> {
     let client = Client::new();
     let rid = req_id("soft");
     let en = is_en(cfg);
+    let esc_command = html_escape(command);
     let text = if en {
         format!(
             "⚠️ <b>Key Config Change Alert</b>\n\n<code>{}</code>\n\n<b>Interpretation</b>\n{}\n\nAuto-allow in {}s unless you intercept.\n<b>Request ID</b> <code>{}</code>",
-            command, explain_command(command, true, en), cfg.soft_guard_timeout_sec, rid
+            esc_command, explain_command(command, true, en), cfg.soft_guard_timeout_sec, rid
         )
     } else {
         format!(
             "⚠️ <b>关键配置修改提醒</b>\n\n<code>{}</code>\n\n<b>建议解读</b>\n{}\n\n默认 {} 秒后自动放行；如需拦截请点按钮。\n<b>请求ID</b> <code>{}</code>",
-            command, explain_command(command, true, en), cfg.soft_guard_timeout_sec, rid
+            esc_command, explain_command(command, true, en), cfg.soft_guard_timeout_sec, rid
         )
     };
     let kb = if en {
@@ -371,7 +412,7 @@ fn soft_guard(cfg: &Config, command: &str) -> Result<bool> {
     ])?;
     let msg_id = sent["result"]["message_id"].as_i64().unwrap_or_default();
 
-    let decision = poll_for_callback(&client, &cfg.bot_token, &format!("abort:{}", rid), cfg.soft_guard_timeout_sec)?;
+    let decision = poll_for_callback(&client, &cfg.bot_token, &[format!("abort:{}", rid)], cfg.soft_guard_timeout_sec)?;
     let blocked = if let Some((_d, cbid)) = decision {
         let t = if en { "🛑 Intercepted" } else { "🛑 已拦截" };
         let _ = tg_api(&client, &cfg.bot_token, "answerCallbackQuery", &[("callback_query_id", cbid), ("text", t.to_string())]);
@@ -383,14 +424,14 @@ fn soft_guard(cfg: &Config, command: &str) -> Result<bool> {
     let final_text = if en {
         format!(
             "🛡️ <b>Config Alert Resolved</b>\n\n<code>{}</code>\n\n<b>Result</b> {}\n\n<b>Interpretation</b>\n{}",
-            command,
+            esc_command,
             if blocked {"🛑 Intercepted"} else {"✅ Auto-allowed after timeout"},
             explain_command(command, true, en)
         )
     } else {
         format!(
             "🛡️ <b>配置修改提醒已处理</b>\n\n<code>{}</code>\n\n<b>结果</b> {}\n\n<b>建议解读</b>\n{}",
-            command,
+            esc_command,
             if blocked {"🛑 已拦截"} else {"✅ 超时自动放行"},
             explain_command(command, true, en)
         )
@@ -522,7 +563,7 @@ fn install() -> Result<()> {
     fs::write(plugin_dir.join("openclaw.plugin.json"), r#"{"id":"approval-guard-full","name":"Approval Guard Full","description":"Intercept exec tool calls and route them through approval guard","configSchema":{}}"#)?;
     let wrapper = std::env::current_exe()?.display().to_string();
     let plugin = format!(
-        "const BIN=\"{}\";\nfunction q(s){{return `'${{s.replace(/'/g, `\'\"\'\"\'`)}}'`;}}\nexport default function register(api){{api.registerHook('before_tool_call', async (event,ctx)=>{{const n=String(event?.toolName??ctx?.toolName??''); if(n!=='exec')return; const p=event?.params??{{}}; const c=typeof p.command==='string'?p.command:''; if(!c.trim())return; if(c.includes(BIN))return; return {{params:{{...p, command:`${{q(BIN)}} run --command ${{q(c)}}`}}}};}},{{name:'approval-guard-full.before-tool-call',description:'Route exec through approval-guard'}});}}",
+        "const BIN=\"{}\";\nfunction q(s){{return `'${{s.replace(/'/g, `\'\"\'\"\'`)}}'`;}}\nfunction isSelfInvocation(cmd){{const t=String(cmd||'').trim(); return t===`${{BIN}} install` || t===`${{BIN}} doctor` || t.startsWith(`${{BIN}} run `) || t.startsWith(`\"${{BIN}}\" run `) || t.startsWith(`'${{BIN}}' run `);}}\nexport default function register(api){{api.registerHook('before_tool_call', async (event,ctx)=>{{const n=String(event?.toolName??ctx?.toolName??''); if(n!=='exec')return; const p=event?.params??{{}}; const c=typeof p.command==='string'?p.command:''; if(!c.trim())return; if(isSelfInvocation(c))return; return {{params:{{...p, command:`${{q(BIN)}} run ${{q(c)}}`}}}};}},{{name:'approval-guard-full.before-tool-call',description:'Route exec through approval-guard'}});}}",
         wrapper
     );
     fs::write(plugin_dir.join("index.ts"), plugin)?;
@@ -568,8 +609,9 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Install => install(),
         Commands::Doctor => doctor(),
-        Commands::Run { command } => {
-            let code = run(&command)?;
+        Commands::Run { command, command_flag } => {
+            let cmd = command.or(command_flag).ok_or_else(|| anyhow!("missing command argument"))?;
+            let code = run(&cmd)?;
             std::process::exit(code);
         }
     }

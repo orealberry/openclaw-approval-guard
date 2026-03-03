@@ -42,6 +42,8 @@ Installer writes and enables a `before_tool_call` plugin so `exec` calls are rou
 
 ## Security model
 
+> If you run a newer OpenClaw version with built-in Exec Approvals, consider using the official approval flow first. This project is an additional guard layer.
+
 - Sensitive values are required from environment variables:
   - `APPROVAL_BOT_TOKEN`
   - `APPROVAL_CHAT_ID`
@@ -52,8 +54,16 @@ Installer writes and enables a `before_tool_call` plugin so `exec` calls are rou
 
 ## One-line install (beginner)
 
+### Linux / macOS
+
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orealberry/openclaw-approval-guard/main/scripts/one-click-install.sh)"
+```
+
+### Windows (PowerShell)
+
+```powershell
+iwr https://raw.githubusercontent.com/orealberry/openclaw-approval-guard/main/scripts/one-click-install.ps1 -OutFile one-click-install.ps1; ./one-click-install.ps1
 ```
 
 > **Note:** The first Rust build compiles many dependencies and can take several minutes. This is normal.

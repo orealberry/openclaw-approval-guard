@@ -49,8 +49,16 @@
 
 ## 一键安装（新手）
 
+### Linux / macOS
+
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orealberry/openclaw-approval-guard/main/scripts/one-click-install.sh)"
+```
+
+### Windows（PowerShell）
+
+```powershell
+iwr https://raw.githubusercontent.com/orealberry/openclaw-approval-guard/main/scripts/one-click-install.ps1 -OutFile one-click-install.ps1; ./one-click-install.ps1
 ```
 
 > **提示：** 首次 Rust 编译会拉取并编译较多依赖，可能需要几分钟，这属于正常现象。
