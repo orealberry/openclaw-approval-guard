@@ -9,17 +9,24 @@ Use `scripts/run-with-approval.sh` as the execution entrypoint for shell command
 
 ## Setup
 
-1. Copy `references/config.example.json` to a real config file path.
-2. Set environment variables:
-   - `APPROVAL_BOT_TOKEN`
-   - `APPROVAL_CHAT_ID`
-   - `APPROVAL_CONFIG` (optional; defaults to `scripts/config.json`)
-3. Ensure `jq`, `curl`, and `flock` are available.
+Use one-shot installer:
+
+```bash
+bash scripts/install.sh
+```
+
+Installer does:
+- prompt bot token (if not provided in `APPROVAL_BOT_TOKEN`)
+- validate token via `getMe`
+- wait for user to send bot message and auto-detect `chat_id`
+- write runtime config to `~/.openclaw/approval-guard/config.json`
+- install plugin hook to `~/.openclaw/extensions/approval-guard-full`
+- restart gateway
 
 ## Run
 
 ```bash
-bash scripts/run-with-approval.sh "<command>"
+bash ~/.openclaw/approval-guard/run-with-approval.sh "<command>"
 ```
 
 ## Behavior
