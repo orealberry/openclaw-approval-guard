@@ -86,14 +86,19 @@ fn load_config() -> Result<Config> {
     let raw = fs::read_to_string(&p).with_context(|| format!("read config: {}", p.display()))?;
     let mut cfg: Config = serde_json::from_str(&raw)?;
 
-    // Force sensitive values from env only.
+    // Hybrid mode: installer-filled config works out-of-box; env vars override when provided.
     let token = std::env::var("APPROVAL_BOT_TOKEN").unwrap_or_default();
     let chat = std::env::var("APPROVAL_CHAT_ID").unwrap_or_default();
-    if token.trim().is_empty() || chat.trim().is_empty() {
-        return Err(anyhow!("APPROVAL_BOT_TOKEN and APPROVAL_CHAT_ID are required in environment"));
+    if !token.trim().is_empty() {
+        cfg.bot_token = token;
     }
-    cfg.bot_token = token;
-    cfg.approver_chat_id = chat;
+    if !chat.trim().is_empty() {
+        cfg.approver_chat_id = chat;
+    }
+
+    if cfg.bot_token.trim().is_empty() || cfg.approver_chat_id.trim().is_empty() {
+        return Err(anyhow!("missing bot token/chat id (run install or set env vars)"));
+    }
     Ok(cfg)
 }
 
@@ -413,7 +418,13 @@ fn install() -> Result<()> {
         lang = if c == "2" { "en".to_string() } else { "zh".to_string() };
     }
 
-    let token = std::env::var("APPROVAL_BOT_TOKEN").unwrap_or_default();
+    let mut token = std::env::var("APPROVAL_BOT_TOKEN").unwrap_or_default();
+    if token.trim().is_empty() {
+        if lang == "en" { print!("Enter APPROVAL_BOT_TOKEN: "); } else { print!("请输入 APPROVAL_BOT_TOKEN: "); }
+        io::stdout().flush()?;
+        io::stdin().read_line(&mut token)?;
+        token = token.trim().to_string();
+    }
     if token.trim().is_empty() {
         return Err(anyhow!("APPROVAL_BOT_TOKEN is required"));
     }
@@ -451,18 +462,12 @@ fn install() -> Result<()> {
             if !chat_id.is_empty() { break; }
         }
         if chat_id.is_empty() { return Err(anyhow!("chat id detection timeout")); }
-        if lang == "en" {
-            println!("Detected chat_id: {}", chat_id);
-            println!("Please export before normal use: export APPROVAL_CHAT_ID='{}'", chat_id);
-        } else {
-            println!("已检测 chat_id: {}", chat_id);
-            println!("正式使用前请导出环境变量: export APPROVAL_CHAT_ID='{}'", chat_id);
-        }
+        if lang == "en" { println!("Detected chat_id: {}", chat_id); } else { println!("已检测 chat_id: {}", chat_id); }
     }
 
     let cfg = Config {
-        bot_token: String::new(),
-        approver_chat_id: String::new(),
+        bot_token: token,
+        approver_chat_id: chat_id,
         timeout_sec: 300,
         soft_guard_timeout_sec: 10,
         openclaw_key_targets: detect_openclaw_targets()?,
@@ -498,10 +503,10 @@ fn install() -> Result<()> {
 }
 
 fn doctor() -> Result<()> {
-    let _cfg = load_config()?;
-    let token_set = std::env::var("APPROVAL_BOT_TOKEN").map(|v| !v.is_empty()).unwrap_or(false);
-    let chat_set = std::env::var("APPROVAL_CHAT_ID").map(|v| !v.is_empty()).unwrap_or(false);
-    println!("config ok, env_token_set={}, env_chat_set={}", token_set, chat_set);
+    let cfg = load_config()?;
+    let token_set = !cfg.bot_token.is_empty();
+    let chat_set = !cfg.approver_chat_id.is_empty();
+    println!("config ok, token_set={}, chat_set={}, lang={}", token_set, chat_set, cfg.lang);
     Ok(())
 }
 

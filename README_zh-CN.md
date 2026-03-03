@@ -75,14 +75,17 @@ cargo build --release
 
 ---
 
-## 使用前环境变量（必需）
+## 敏感信息与环境变量
+
+默认安装流程会把 token/chat 写入本地配置（Linux 下权限收紧为 0600）。  
+也支持通过环境变量在运行时覆盖：
 
 ```bash
 export APPROVAL_BOT_TOKEN='...'
 export APPROVAL_CHAT_ID='...'
 ```
 
-如果你使用英文：
+如果你希望安装时直接指定英文：
 ```bash
 export APPROVAL_LANG='en'
 ```

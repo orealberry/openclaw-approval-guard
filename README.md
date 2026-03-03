@@ -78,14 +78,17 @@ cargo build --release
 
 ---
 
-## Required environment variables
+## Secrets & environment variables
+
+By default, `install` stores token/chat locally (config file permission is tightened on Linux).  
+You can still override at runtime with env vars:
 
 ```bash
 export APPROVAL_BOT_TOKEN='...'
 export APPROVAL_CHAT_ID='...'
 ```
 
-Optional:
+Optional install-time language override:
 
 ```bash
 export APPROVAL_LANG='en'   # or zh
