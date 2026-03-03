@@ -27,13 +27,24 @@ enum Commands {
     Doctor,
 }
 
+fn default_lang() -> String { "zh".to_string() }
+fn default_timeout() -> u64 { 300 }
+fn default_soft_timeout() -> u64 { 10 }
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Config {
+    #[serde(default)]
     bot_token: String,
+    #[serde(default)]
     approver_chat_id: String,
+    #[serde(default = "default_timeout")]
     timeout_sec: u64,
+    #[serde(default = "default_soft_timeout")]
     soft_guard_timeout_sec: u64,
+    #[serde(default)]
     openclaw_key_targets: Vec<String>,
+    #[serde(default = "default_lang")]
+    lang: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,7 +111,22 @@ fn tg_api(client: &Client, token: &str, method: &str, form: &[(&str, String)]) -
     Ok(res.json()?)
 }
 
-fn explain_command(cmd: &str, soft: bool) -> &'static str {
+fn is_en(cfg: &Config) -> bool { cfg.lang.eq_ignore_ascii_case("en") || cfg.lang.eq_ignore_ascii_case("english") }
+
+fn explain_command(cmd: &str, soft: bool, en: bool) -> &'static str {
+    if en {
+        if cmd.contains("rm -rf") { return "Interpretation: rm -rf force-deletes recursively and can cause irreversible data loss."; }
+        if cmd.contains("dd if=") { return "Interpretation: dd can write raw block devices; wrong targets may destroy disk data."; }
+        if cmd.contains("mkfs.") { return "Interpretation: mkfs formats filesystems and wipes target partition data."; }
+        if (cmd.contains("curl") || cmd.contains("wget")) && cmd.contains('|') { return "Interpretation: download-and-pipe execution has supply-chain and RCE risk."; }
+        if cmd.contains("chmod 777") { return "Interpretation: chmod 777 is overly permissive and weakens security."; }
+        if cmd.contains("sudo ") { return "Interpretation: sudo runs with elevated privilege and broader blast radius."; }
+        if cmd.contains("iptables") || cmd.contains("ufw") || cmd.contains("firewall-cmd") { return "Interpretation: firewall changes may break connectivity or expose services."; }
+        if soft && cmd.contains("openclaw.json") { return "Interpretation: openclaw.json is core config; bad edits can break gateway/plugins."; }
+        if soft && cmd.contains("cron/jobs.json") { return "Interpretation: cron config changes may cause missed or unexpected jobs."; }
+        return "Interpretation: this command may affect system state; verify target and parameters.";
+    }
+
     if cmd.contains("rm -rf") { return "解读：rm -rf 是递归强制删除指令，误用会造成不可逆数据丢失。"; }
     if cmd.contains("dd if=") { return "解读：dd 可直接读写块设备，目标写错会破坏磁盘数据。"; }
     if cmd.contains("mkfs.") { return "解读：mkfs 会格式化文件系统，目标分区数据会被清空。"; }
@@ -219,11 +245,23 @@ fn edit_msg(client: &Client, cfg: &Config, msg_id: i64, text: &str) {
 fn hard_approval(cfg: &Config, command: &str, risk: Risk, reason: &str) -> Result<bool> {
     let client = Client::new();
     let rid = req_id("req");
-    let text = format!(
-        "🚨 <b>高危操作审批</b>\n\n<b>风险等级</b> {}\n<b>触发原因</b> {}\n\n<b>命令</b>\n<code>{}</code>\n\n<b>请求ID</b> <code>{}</code>\n\n<b>建议解读</b>\n{}\n\n请确认是否执行该操作：",
-        risk.as_str().to_uppercase(), reason, command, rid, explain_command(command, false)
-    );
-    let kb = json!({"inline_keyboard":[[{"text":"✅ 批准执行","callback_data":format!("approve:{}", rid)},{"text":"⛔ 拒绝执行","callback_data":format!("reject:{}", rid)}]]});
+    let en = is_en(cfg);
+    let text = if en {
+        format!(
+            "🚨 <b>High-Risk Command Approval</b>\n\n<b>Risk</b> {}\n<b>Reason</b> {}\n\n<b>Command</b>\n<code>{}</code>\n\n<b>Request ID</b> <code>{}</code>\n\n<b>Interpretation</b>\n{}\n\nApprove execution?",
+            risk.as_str().to_uppercase(), reason, command, rid, explain_command(command, false, en)
+        )
+    } else {
+        format!(
+            "🚨 <b>高危操作审批</b>\n\n<b>风险等级</b> {}\n<b>触发原因</b> {}\n\n<b>命令</b>\n<code>{}</code>\n\n<b>请求ID</b> <code>{}</code>\n\n<b>建议解读</b>\n{}\n\n请确认是否执行该操作：",
+            risk.as_str().to_uppercase(), reason, command, rid, explain_command(command, false, en)
+        )
+    };
+    let kb = if en {
+        json!({"inline_keyboard":[[{"text":"✅ Approve","callback_data":format!("approve:{}", rid)},{"text":"⛔ Reject","callback_data":format!("reject:{}", rid)}]]})
+    } else {
+        json!({"inline_keyboard":[[{"text":"✅ 批准执行","callback_data":format!("approve:{}", rid)},{"text":"⛔ 拒绝执行","callback_data":format!("reject:{}", rid)}]]})
+    };
     let sent = tg_api(&client, &cfg.bot_token, "sendMessage", &[
         ("chat_id", cfg.approver_chat_id.clone()),
         ("parse_mode", "HTML".to_string()),
@@ -238,20 +276,29 @@ fn hard_approval(cfg: &Config, command: &str, risk: Risk, reason: &str) -> Resul
 
     let approved = match decision {
         Some((d, cbid)) if d.starts_with("approve:") => {
-            let _ = tg_api(&client, &cfg.bot_token, "answerCallbackQuery", &[("callback_query_id", cbid), ("text", "✅ 已批准，开始执行".to_string())]);
+            let t = if en { "✅ Approved, executing" } else { "✅ 已批准，开始执行" };
+            let _ = tg_api(&client, &cfg.bot_token, "answerCallbackQuery", &[("callback_query_id", cbid), ("text", t.to_string())]);
             true
         }
         Some((_, cbid)) => {
-            let _ = tg_api(&client, &cfg.bot_token, "answerCallbackQuery", &[("callback_query_id", cbid), ("text", "⛔ 已拒绝".to_string())]);
+            let t = if en { "⛔ Rejected" } else { "⛔ 已拒绝" };
+            let _ = tg_api(&client, &cfg.bot_token, "answerCallbackQuery", &[("callback_query_id", cbid), ("text", t.to_string())]);
             false
         }
         None => false,
     };
 
-    let final_text = format!(
-        "🛡️ <b>审批已处理</b>\n\n<b>风险等级</b> {}\n<b>命令</b>\n<code>{}</code>\n\n<b>结果</b> {}\n\n<b>建议解读</b>\n{}",
-        risk.as_str().to_uppercase(), command, if approved {"✅ 已批准"} else {"⛔ 已拒绝/超时"}, explain_command(command, false)
-    );
+    let final_text = if en {
+        format!(
+            "🛡️ <b>Approval Resolved</b>\n\n<b>Risk</b> {}\n<b>Command</b>\n<code>{}</code>\n\n<b>Result</b> {}\n\n<b>Interpretation</b>\n{}",
+            risk.as_str().to_uppercase(), command, if approved {"✅ Approved"} else {"⛔ Rejected/Timeout"}, explain_command(command, false, en)
+        )
+    } else {
+        format!(
+            "🛡️ <b>审批已处理</b>\n\n<b>风险等级</b> {}\n<b>命令</b>\n<code>{}</code>\n\n<b>结果</b> {}\n\n<b>建议解读</b>\n{}",
+            risk.as_str().to_uppercase(), command, if approved {"✅ 已批准"} else {"⛔ 已拒绝/超时"}, explain_command(command, false, en)
+        )
+    };
     edit_msg(&client, cfg, msg_id, &final_text);
     unpin_msg(&client, cfg, msg_id);
     Ok(approved)
@@ -260,11 +307,23 @@ fn hard_approval(cfg: &Config, command: &str, risk: Risk, reason: &str) -> Resul
 fn soft_guard(cfg: &Config, command: &str) -> Result<bool> {
     let client = Client::new();
     let rid = req_id("soft");
-    let text = format!(
-        "⚠️ <b>关键配置修改提醒</b>\n\n<code>{}</code>\n\n<b>建议解读</b>\n{}\n\n默认 {} 秒后自动放行；如需拦截请点按钮。\n<b>请求ID</b> <code>{}</code>",
-        command, explain_command(command, true), cfg.soft_guard_timeout_sec, rid
-    );
-    let kb = json!({"inline_keyboard":[[{"text":"🛑 拦截本次执行","callback_data":format!("abort:{}", rid)}]]});
+    let en = is_en(cfg);
+    let text = if en {
+        format!(
+            "⚠️ <b>Key Config Change Alert</b>\n\n<code>{}</code>\n\n<b>Interpretation</b>\n{}\n\nAuto-allow in {}s unless you intercept.\n<b>Request ID</b> <code>{}</code>",
+            command, explain_command(command, true, en), cfg.soft_guard_timeout_sec, rid
+        )
+    } else {
+        format!(
+            "⚠️ <b>关键配置修改提醒</b>\n\n<code>{}</code>\n\n<b>建议解读</b>\n{}\n\n默认 {} 秒后自动放行；如需拦截请点按钮。\n<b>请求ID</b> <code>{}</code>",
+            command, explain_command(command, true, en), cfg.soft_guard_timeout_sec, rid
+        )
+    };
+    let kb = if en {
+        json!({"inline_keyboard":[[{"text":"🛑 Intercept this run","callback_data":format!("abort:{}", rid)}]]})
+    } else {
+        json!({"inline_keyboard":[[{"text":"🛑 拦截本次执行","callback_data":format!("abort:{}", rid)}]]})
+    };
     let sent = tg_api(&client, &cfg.bot_token, "sendMessage", &[
         ("chat_id", cfg.approver_chat_id.clone()),
         ("parse_mode", "HTML".to_string()),
@@ -275,18 +334,28 @@ fn soft_guard(cfg: &Config, command: &str) -> Result<bool> {
 
     let decision = poll_for_callback(&client, &cfg.bot_token, &format!("abort:{}", rid), cfg.soft_guard_timeout_sec)?;
     let blocked = if let Some((_d, cbid)) = decision {
-        let _ = tg_api(&client, &cfg.bot_token, "answerCallbackQuery", &[("callback_query_id", cbid), ("text", "🛑 已拦截".to_string())]);
+        let t = if en { "🛑 Intercepted" } else { "🛑 已拦截" };
+        let _ = tg_api(&client, &cfg.bot_token, "answerCallbackQuery", &[("callback_query_id", cbid), ("text", t.to_string())]);
         true
     } else {
         false
     };
 
-    let final_text = format!(
-        "🛡️ <b>配置修改提醒已处理</b>\n\n<code>{}</code>\n\n<b>结果</b> {}\n\n<b>建议解读</b>\n{}",
-        command,
-        if blocked {"🛑 已拦截"} else {"✅ 超时自动放行"},
-        explain_command(command, true)
-    );
+    let final_text = if en {
+        format!(
+            "🛡️ <b>Config Alert Resolved</b>\n\n<code>{}</code>\n\n<b>Result</b> {}\n\n<b>Interpretation</b>\n{}",
+            command,
+            if blocked {"🛑 Intercepted"} else {"✅ Auto-allowed after timeout"},
+            explain_command(command, true, en)
+        )
+    } else {
+        format!(
+            "🛡️ <b>配置修改提醒已处理</b>\n\n<code>{}</code>\n\n<b>结果</b> {}\n\n<b>建议解读</b>\n{}",
+            command,
+            if blocked {"🛑 已拦截"} else {"✅ 超时自动放行"},
+            explain_command(command, true, en)
+        )
+    };
     edit_msg(&client, cfg, msg_id, &final_text);
     Ok(!blocked)
 }
@@ -333,6 +402,17 @@ fn install() -> Result<()> {
     let rt = runtime_dir()?;
     fs::create_dir_all(&rt)?;
 
+    let mut lang = std::env::var("APPROVAL_LANG").unwrap_or_default();
+    if lang.trim().is_empty() {
+        println!("Select language / 选择语言:\n1) Chinese (简体中文)\n2) English");
+        print!("Choice [1/2]: ");
+        io::stdout().flush()?;
+        let mut c = String::new();
+        io::stdin().read_line(&mut c)?;
+        let c = c.trim();
+        lang = if c == "2" { "en".to_string() } else { "zh".to_string() };
+    }
+
     let token = std::env::var("APPROVAL_BOT_TOKEN").unwrap_or_default();
     if token.trim().is_empty() {
         return Err(anyhow!("APPROVAL_BOT_TOKEN is required"));
@@ -342,11 +422,15 @@ fn install() -> Result<()> {
     let me = tg_api(&client, &token, "getMe", &[])?;
     if !me["ok"].as_bool().unwrap_or(false) { return Err(anyhow!("token invalid")); }
     let username = me["result"]["username"].as_str().unwrap_or("bot");
-    println!("[ok] bot: @{}", username);
+    if lang == "en" { println!("[ok] bot: @{}", username); } else { println!("[ok] 机器人: @{}", username); }
 
     let mut chat_id = std::env::var("APPROVAL_CHAT_ID").unwrap_or_default();
     if chat_id.trim().is_empty() {
-        println!("APPROVAL_CHAT_ID not set. Send one message to @{} now, then press Enter.", username);
+        if lang == "en" {
+            println!("APPROVAL_CHAT_ID not set. Send one message to @{} now, then press Enter.", username);
+        } else {
+            println!("未设置 APPROVAL_CHAT_ID。请先给 @{} 发一条消息，然后回车继续。", username);
+        }
         let mut dummy = String::new();
         io::stdin().read_line(&mut dummy)?;
 
@@ -367,8 +451,13 @@ fn install() -> Result<()> {
             if !chat_id.is_empty() { break; }
         }
         if chat_id.is_empty() { return Err(anyhow!("chat id detection timeout")); }
-        println!("Detected chat_id: {}", chat_id);
-        println!("Please export before normal use: export APPROVAL_CHAT_ID='{}'", chat_id);
+        if lang == "en" {
+            println!("Detected chat_id: {}", chat_id);
+            println!("Please export before normal use: export APPROVAL_CHAT_ID='{}'", chat_id);
+        } else {
+            println!("已检测 chat_id: {}", chat_id);
+            println!("正式使用前请导出环境变量: export APPROVAL_CHAT_ID='{}'", chat_id);
+        }
     }
 
     let cfg = Config {
@@ -377,6 +466,7 @@ fn install() -> Result<()> {
         timeout_sec: 300,
         soft_guard_timeout_sec: 10,
         openclaw_key_targets: detect_openclaw_targets()?,
+        lang,
     };
     let cfg_path = config_path()?;
     let cfg_text = serde_json::to_string_pretty(&cfg)?;
@@ -399,7 +489,11 @@ fn install() -> Result<()> {
     fs::write(plugin_dir.join("index.ts"), plugin)?;
 
     let _ = Command::new("openclaw").args(["gateway", "restart"]).status();
-    println!("Installed. Test: approval-guard run --command \"sudo id\"");
+    if cfg.lang == "en" {
+        println!("Installed. Test: openclaw-approval-guard run \"sudo id\"");
+    } else {
+        println!("安装完成。测试命令: openclaw-approval-guard run \"sudo id\"");
+    }
     Ok(())
 }
 
