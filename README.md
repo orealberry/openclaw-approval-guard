@@ -56,6 +56,8 @@ Installer writes and enables a `before_tool_call` plugin so `exec` calls are rou
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orealberry/openclaw-approval-guard/main/scripts/one-click-install.sh)"
 ```
 
+> **Note:** The first Rust build compiles many dependencies and can take several minutes. This is normal.
+
 The script will:
 1. install Rust if missing
 2. clone repo and build release binary

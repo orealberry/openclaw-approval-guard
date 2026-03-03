@@ -53,6 +53,8 @@
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orealberry/openclaw-approval-guard/main/scripts/one-click-install.sh)"
 ```
 
+> **提示：** 首次 Rust 编译会拉取并编译较多依赖，可能需要几分钟，这属于正常现象。
+
 一键脚本会自动：
 1. 检查/安装 Rust（缺失时）
 2. 拉取仓库并编译 release
